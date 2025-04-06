@@ -2,143 +2,138 @@ import cv2
 import numpy as np
 import argparse
 
-''' Draws a line on an image with color corresponding to the direction of line
- image im: image to draw line on
- float x, y: starting point of line
- float dx, dy: vector corresponding to line angle and magnitude
-'''
-def draw_line():
-  return None
+"""örnek run kodu"""
+"""python flow_image.py img1.jpg img2.jpg --smooth 15 --stride 8"""
+"""python -c "from flow_image import optical_flow_webcam; optical_flow_webcam()"""
 
 
-''' Make an integral image or summed area table from an image
- image im: image to process
- returns: image I such that I[x,y] = sum{i<=x, j<=y}(im[i,j])
-'''
-def make_integral_image(img):
-  height, width, channels = img.shape
-  new_im = np.zeros((height, width, channels), dtype=np.uint32)
+def draw_line(im, x, y, dx, dy, color):
+    angle = np.arctan2(dy, dx)
+    color = (int(255 * (np.cos(angle) + 1)/2), 
+             int(255 * (np.sin(angle) + 1)/2), 
+             128)
+    cv2.line(im, (int(x), int(y)), (int(x + dx), int(y + dy)), color, 1)
+    cv2.circle(im, (int(x), int(y)), 2, color, -1)
 
-  for y in range(height):
-      for x in range(width):
-          new_im[y, x] = img[y, x]
+def make_integral_image(im):
+    """rbg imah"""
+    if len(im.shape) == 3:
+        
+        integral = np.zeros_like(im, dtype=np.float32)
+        
+        for c in range(im.shape[2]):
+            temp = np.cumsum(np.cumsum(im[:, :, c].astype(np.float32), axis=0), axis=1)
+            integral[:, :, c] = temp
+            """print(integral)"""
+        return integral
+    else:
+        
+        return np.cumsum(np.cumsum(im.astype(np.float32), axis=0), axis=1)
 
-          if x > 0:
-              new_im[y, x] += new_im[y, x - 1]
-          if y > 0:
-              new_im[y, x] += new_im[y - 1, x]
-          if x > 0 and y > 0:
-              new_im[y, x] -= new_im[y - 1, x - 1]
+"""benzer kod smooting"""
+def box_filter_image(im, s):
 
-  
-  return new_im
-
-''' Apply a box filter to an image using an integral image for speed
- image im: image to smooth
- int s: window size for box filter
- returns: smoothed image
-'''
-def box_filter_image(img, s):
-  img = make_integral_image(img)
-  h, w, c = img.shape
-  new_img = np.zeros((h, w, 3), dtype=np.uint32)
-  kernel = np.ones((s, s), dtype=np.float32) / 9
-  pad_size = s//2
-  padded = np.pad(img, ((pad_size, pad_size), (pad_size, pad_size), (0, 0)), mode='constant')
+    if s <= 1:
+        return im.copy()
     
-  for ch in range(c):
-      for i in range(h):
-          for j in range(w):
-              region = padded[i:i+s, j:j+s, ch]
-              new_img[i, j, ch] = np.sum(region * kernel)  
-
-  cv2.imwrite("box_filter.jpg",new_img)
-  return new_img
-
-"""Ek method"""
-def conv2d(im, kernel):
-    h, w, c = im.shape
-    k_size = kernel.shape[0]
-    pad = k_size // 2
-    padded = np.pad(im, ((pad, pad), (pad, pad), (0, 0)), mode='constant')
-    new_img = np.zeros((h, w, 3), dtype=np.uint8)
+    integral = make_integral_image(im)
+    h, w = im.shape[:2]
+    out = np.zeros_like(im, dtype=np.float32)
+    s2 = s // 2
     
-    for ch in range(c):
-        for i in range(h):
-            for j in range(w):
-                region = padded[i:i+k_size, j:j+k_size, ch]
-                new_img[i, j, ch] =  np.clip(np.sum(region * kernel).astype(np.float32), 0, 255).astype(np.uint8)
-    
-    return new_img
+    if len(im.shape) == 3:
+        for y in range(h):
+            for x in range(w):
+                y1 = max(0, y - s2)
+                x1 = max(0, x - s2)
+                y2 = min(h-1, y + s2)
+                x2 = min(w-1, x + s2)
+                
+                area = (y2 - y1) * (x2 - x1)
+                for c in range(im.shape[2]):
+                    out[y,x,c] = (integral[y2,x2,c] - integral[y1,x2,c] - 
+                                 integral[y2,x1,c] + integral[y1,x1,c]) / area
+    else:
+        for y in range(h):
+            for x in range(w):
+                y1 = max(0, y - s2)
+                x1 = max(0, x - s2)
+                y2 = min(h-1, y + s2)
+                x2 = min(w-1, x + s2)
+                
+                area = (y2 - y1) * (x2 - x1)
+                out[y,x] = (integral[y2,x2] - integral[y1,x2] - 
+                           integral[y2,x1] + integral[y1,x1]) / area
+    return out
+
 
 ''' Calculate the time-structure matrix of an image pair.
  image im: the input image.
  image prev: the previous image in sequence.
  int s: window size for smoothing.
  returns: structure matrix. 1st channel is Ix^2, 2nd channel is Iy^2,
-          3rd channel is IxIy, 4th channel is IxIt, 5th channel is IyIt.
+        3rd channel is IxIy, 4th channel is IxIt, 5th channel is IyIt.
 '''
-
-
-
-"""RETURN FONKSŞİYONU DÜZENLENECEK GRAY SCALE OLARAK İŞLENEBİLİR """
-def time_structure_matrix(im,image_prev):
-  weight, height , colochanel = im.shape
-  It = np.zeros((weight,height,colochanel),np.float32)
-  structure_matrix = np.zeros((weight,height,colochanel),np.float32)
-  gx_kernel = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
-  gy_kernel = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+def time_structure_matrix(im, prev, s):
     
-  grad_x = conv2d(im, gx_kernel)
-  grad_y = conv2d(im, gy_kernel)
+    if im.shape != prev.shape:
+        prev = cv2.resize(prev, (im.shape[1], im.shape[0]))
+    
+    if len(im.shape) == 3:
+        im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
+    else:
+        im_gray = im
+        prev_gray = prev
+    """önceki ödevde yazılşdı"""
+    Ix = cv2.Sobel(im_gray, cv2.CV_32F, 1, 0, ksize=3)
+    Iy = cv2.Sobel(im_gray, cv2.CV_32F, 0, 1, ksize=3)
+    """32 bit"""
+    It = im_gray.astype(np.float32) - prev_gray.astype(np.float32)
+    
+    Ix2 = Ix * Ix
+    Iy2 = Iy * Iy
+    IxIy = Ix * Iy
+    IxIt = Ix * It
+    IyIt = Iy * It
+    
+    Ix2_smooth = box_filter_image(Ix2, s)
+    Iy2_smooth = box_filter_image(Iy2, s)
 
+    IxIy_smooth = box_filter_image(IxIy, s)
+    IxIt_smooth = box_filter_image(IxIt, s)
+    IyIt_smooth = box_filter_image(IyIt, s)
+    structure = np.zeros((im.shape[0], im.shape[1], 5), dtype=np.float32)
+    structure[:,:,0] = Ix2_smooth
+    structure[:,:,1] = Iy2_smooth
+    structure[:,:,2] = IxIy_smooth
+    structure[:,:,3] = IxIt_smooth
+    structure[:,:,4] = IyIt_smooth
+    return structure
 
-  for c in range(colochanel):
-    for w in range(weight):
-      for h in range(height):
-         It[w,h,c]= im[w,h,c]-image_prev[w,h,c]
-        
-  IX = grad_x*grad_x
-  IY = grad_y*grad_y
-  XY = grad_x*grad_y  
-  TX = grad_x*It
-  TY = grad_y*It
-
-  return  IX,IY,XY,TX,TY
-'''
-Calculate the velocity given a structure image
-image S: time-structure image
-int stride: 
-''' 
-def velocity_image(im,image_prev,S):
-  weight, height , colochanel = im.shape
-  structure_matrix = np.zeros((weight,height,5),np.float32)
-  structure_matrix =  time_structure_matrix(im,image_prev)
-  out_matrix = structure_matrix = np.zeros((weight,height,2),np.float32)
-  M = np.zeros((2,2),np.float32)
-  Right_Side_vector = np.zeros((1,2),np.float32)
-  for w in range(weight):
-     for h in range(height):
-        for x in range(2):
-           for y in range(2):
-              M[x,y] = structure_matrix[w,h(x+y-2)]
-
-  return None
-'''
-Draw lines on an image given the velocity
-image im: image to draw on
-image v: velocity of each pixel
-float scale: scalar to multiply velocity by for drawing
-'''
-def draw_flow():
-  return None
-'''
-Constrain the absolute value of each image pixel
-image im: image to constrain
-float v: each pixel will be in range [-v, v]
-'''
-def constrain_image():
-  return None
+def velocity_image(S, stride):
+    
+    h, w = S.shape[:2]
+    vx = np.zeros((h, w), dtype=np.float32)
+    vy = np.zeros((h, w), dtype=np.float32)
+    
+    for y in range(0, h, stride):
+        for x in range(0, w, stride):
+            a = S[y,x,0]
+            b = S[y,x,2]
+            c = S[y,x,1]
+            d = -S[y,x,3]
+            e = -S[y,x,4]
+            
+            M = np.array([[a, b], [b, c]])
+            det = a * c - b * b
+            if det > 1e-6:
+                inv_M = np.array([[c, -b], [-b, a]]) / det
+                v = inv_M @ np.array([d, e])
+                vx[y,x] = v[0]
+                vy[y,x] = v[1]
+    
+    return vx, vy
 '''
 Calculate the optical flow between two images
 image im: current image
@@ -147,30 +142,80 @@ int smooth: amount to smooth structure matrix by
 int stride: downsampling for velocity matrix
 returns: velocity matrix
 '''
-def optical_flow_images():
-  return None
-'''
-Run optical flow demo on webcam
-int smooth: amount to smooth structure matrix by
-int stride: downsampling for velocity matrix
-int div: downsampling factor for images from webcam
-'''
-def optical_flow_webcam():
-  return None
+def draw_flow(im, v, scale):
+    
+    vx, vy = v
+    h, w = im.shape[:2]
+    
+    for y in range(0, h, 8):
+        for x in range(0, w, 8):
+            dx = vx[y,x] * scale
+            dy = vy[y,x] * scale
+            if dx*dx + dy*dy > 0.1:
+                draw_line(im, x, y, dx, dy, (0, 255, 0))
+
+def optical_flow_images(im, prev, smooth=15, stride=8):
+    S = time_structure_matrix(im, prev, smooth)
+    vx, vy = velocity_image(S, stride)
+    return vx, vy
+
+"""Kapatma fonksiyonu ekle
+"""
+def optical_flow_webcam(smooth=15, stride=4, div=8):
+    
+    cap = cv2.VideoCapture(0)
+    
+    ret, prev = cap.read()
+    if not ret:
+        print("caamera not found")
+        return
+    
+    prev = cv2.resize(prev, (prev.shape[1]//div, prev.shape[0]//div))
+    
+    while True:
+        ret, im = cap.read()
+ 
+        
+        im = cv2.resize(im, (im.shape[1]//div, im.shape[0]//div))
+        vx, vy = optical_flow_images(im, prev, smooth, stride)
+        
+        draw_flow(im, (vx, vy), 5)
+        cv2.imshow('VİDEO', im)
+        
+        prev = im.copy()
+        
+        """Yanıt vermiyor"""
+        cv2.waitKey(1)
+    
+    cap.release()
+    cv2.destroyAllWindows()
 
 def __main__():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Run image resizing.")
-    parser.add_argument('img_name', type=str, help="Path to the input image")
-    # Required argument for the image filename
+    # Parse command-line arguments for input image files
+    parser = argparse.ArgumentParser(description="Run optical flow between two frames.")
+    parser.add_argument('img1', type=str, help="Path to the first image")
+    parser.add_argument('img2', type=str, help="Path to the second image")
+    parser.add_argument('--smooth', type=int, default=15)
+    parser.add_argument('--stride', type=int, default=8)
     args = parser.parse_args()
 
-    # Load the image
-    img = cv2.imread("resim.jpg")
-    make_integral_image(img)
-    box_filter_image(img,5)
-    out = optical_flow_images(img)
-    
+    # Read the images
+    img1 = cv2.imread(args.img1)
+    img2 = cv2.imread(args.img2)
+
+
+
+    # Run optical flow
+    vx, vy = optical_flow_images(img2, img1, args.smooth, args.stride)
+
+    # Visualize flow on the first image
+    draw_flow(img1, (vx, vy), 5)
+
+    # Display the result
+    cv2.imshow('Result', img1)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    cv2.imwrite("output_result.jpg", img1)
+
 if __name__ == "__main__":
-    
     __main__()
